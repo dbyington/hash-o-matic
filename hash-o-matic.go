@@ -1,13 +1,18 @@
 package main
 
 import (
-    "os"
-    "fmt"
-    "github.com/dbyington/hash-o-matic/util"
+    "github.com/dbyington/hash-o-matic/handlers"
+    "log"
+    "net/http"
 )
 
+const LISTEN_ADDR = ":8080"
+const HASH_URL = "/hash"
+
 func main() {
-    if (len(os.Args) > 1) {
-        fmt.Printf("Your string as a base64 encoded sha512 hash is:\n'%s'\n", util.HashString(os.Args[1]))
-    }
+    http.HandleFunc(HASH_URL, handlers.HashHandler)
+    log.Fatal(http.ListenAndServe(LISTEN_ADDR,
+        handlers.LogHandler(http.DefaultServeMux)))
 }
+
+
