@@ -3,25 +3,27 @@ package handlers
 import (
     "net/http"
     "testing"
-    "strings"
     "net/url"
     "io/ioutil"
+    "net/http/httptest"
+    "strings"
 )
 
-const SERVER_ADDR = "http://localhost:8080"
 const HASH_URL = "/hash"
 const HASH_EXPECTED = "ZEHhWB65gUlzdVwtDQArEyx+KVLzp/aTaRaPlBzYRIFj6vjFdqEb0Q5B8zVKCZ0vKbZPZklJz0Fd7su2A+gf7Q=="
 
 
 func TestHashPostMethod(t *testing.T) {
-    var body = url.Values{}
+
+    server := httptest.NewServer(http.HandlerFunc(HashPostMethod))
+    defer server.Close()
+
+    body := url.Values{}
     body.Set("password", "angryMonkey")
-    target := SERVER_ADDR + HASH_URL
 
     t.Log("Valid request should return 201")
-    req, err := http.NewRequest(http.MethodPost, target, strings.NewReader(body.Encode()))
-    req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-    res, err := http.DefaultClient.Do(req)
+    res, err := http.PostForm(server.URL, body)
+    defer res.Body.Close()
     if err != nil {
         t.Error(err)
     }
@@ -34,9 +36,7 @@ func TestHashPostMethod(t *testing.T) {
     }
 
     t.Log("No form data should return 400")
-    req, err = http.NewRequest(http.MethodPost, target, strings.NewReader(""))
-    req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-    res, err = http.DefaultClient.Do(req)
+    res, err = http.PostForm(server.URL, url.Values{})
     if err != nil {
         t.Error(err)
     }
@@ -44,11 +44,17 @@ func TestHashPostMethod(t *testing.T) {
         t.Errorf("POST to %s; expected %d got %d\n", HASH_URL, http.StatusBadRequest, res.StatusCode)
     }
 
+}
+
+func TestHashHandler(t *testing.T) {
+
+    server := httptest.NewServer(http.HandlerFunc(HashHandler))
+    defer server.Close()
 
     t.Log("PUT to /hash should return 404")
-    req, err = http.NewRequest(http.MethodPut, target, strings.NewReader(body.Encode()))
+    req, err := http.NewRequest(http.MethodPut, server.URL, strings.NewReader(""))
     req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
-    res, err = http.DefaultClient.Do(req)
+    res, err := http.DefaultClient.Do(req)
     if err != nil {
         t.Error(err)
     }
@@ -57,7 +63,7 @@ func TestHashPostMethod(t *testing.T) {
     }
 
     t.Logf("GET to /hash should return 404")
-    req, err = http.NewRequest(http.MethodGet, target, strings.NewReader(""))
+    req, err = http.NewRequest(http.MethodGet, server.URL, strings.NewReader(""))
     res, err = http.DefaultClient.Do(req)
     if err != nil {
         t.Error(err)
@@ -66,5 +72,4 @@ func TestHashPostMethod(t *testing.T) {
         t.Errorf("GET to %s; expected %d got %d\n", HASH_URL, http.StatusNotFound, res.StatusCode)
     }
 
-    res.Body.Close()
 }
