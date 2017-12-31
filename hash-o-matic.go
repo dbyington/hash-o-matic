@@ -30,7 +30,10 @@ func main() {
     doneChan := make(chan bool)
 
     // routes
+    // If only '/hash/' was configured requests to '/hash' would be redirected
+    // that should not happen, hence the separate routes
     http.HandleFunc("/hash", handlers.HashHandler)
+    http.HandleFunc("/hash/", handlers.HashHandler)
     http.HandleFunc("/shutdown", ShutdownHandler)
 
     // wait for interrupt or shutdown call
