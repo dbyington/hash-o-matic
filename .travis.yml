@@ -4,7 +4,7 @@ go:
   - 1.9.2
 
 install:
-  - go get -t ./...
+  - go get github.com/dbyington/hash-o-matic
   - go get github.com/mattn/goveralls
 
 script:
