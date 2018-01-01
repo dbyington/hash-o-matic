@@ -4,11 +4,12 @@ go:
   - 1.9.2
 
 install:
-  - go get github.com/dbyington/hash-o-matic
   - go get github.com/mattn/goveralls
 
 script:
+  - du -sh ./*
+  - du -sh ./.*
   - PATH="$HOME/gopath/bin:$PATH"
   - GOPATH="${HOME}/go"
   - touch ${HOME}/coverage.out
-  - go test -v -covermode=count -coverprofile=${HOME}/coverage.out && ${GOPATH}/bin/goveralls -coverprofile=${HOME}/coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN
+  - go test -covermode=count -coverprofile=${HOME}/coverage.out && ${GOPATH}/bin/goveralls -coverprofile=${HOME}/coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN
