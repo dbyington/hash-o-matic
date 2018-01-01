@@ -8,4 +8,6 @@ install:
 
 script:
   - PATH="$HOME/gopath/bin:$PATH"
-  - go test -v -covermode=count -coverprofile=coverage.out && ${GOPATH}/bin/goveralls -coverprofile=coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN
+  - GOPATH="${HOME}/go"
+  - touch ${HOME}/coverage.out
+  - go test -v -covermode=count -coverprofile=${HOME}/coverage.out && ${GOPATH}/bin/goveralls -coverprofile=${HOME}/coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN
