@@ -12,4 +12,4 @@ script:
   - touch ${HOME}/coverage.out
   - go test -covermode=count -coverprofile=${HOME}/coverage.out
   - cat ${HOME}/coverage.out
-  - ${GOPATH}/bin/goveralls -service=travis-ci
+  - ${GOPATH}/bin/goveralls -coverprofile=${HOME}/coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN
