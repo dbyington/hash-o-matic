@@ -3,7 +3,7 @@ language: go
 go:
   - 1.9.2
 
-install:
+bfore_install:
   - go get ./...
   - go get github.com/mattn/goveralls
 
@@ -11,4 +11,5 @@ script:
   - PATH="$HOME/gopath/bin:$PATH"
   - touch ${HOME}/coverage.out
   - go test -covermode=count -coverprofile=${HOME}/coverage.out
-  - ${GOPATH}/bin/goveralls -coverprofile=${HOME}/coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN
+  - cat ${HOME}/coverage.out
+  - ${GOPATH}/bin/goveralls -service=travis-ci
