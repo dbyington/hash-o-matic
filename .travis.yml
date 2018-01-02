@@ -5,11 +5,13 @@ go:
 
 install:
   - go get ./...
-  - go get github.com/dbyington/hash-o-matic
+#  - go get github.com/dbyington/hash-o-matic # Shouldn't need this
   - go get github.com/mattn/goveralls
 
 script:
   - PATH="$HOME/gopath/bin:$PATH"
-  - GOPATH="${HOME}/go"
   - touch ${HOME}/coverage.out
-  - go test -covermode=count -coverprofile=${HOME}/coverage.out && ${GOPATH}/bin/goveralls -coverprofile=${HOME}/coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN
+  - go env
+  - go test -covermode=count -coverprofile=${HOME}/coverage.out
+  - which goveralls
+  - ${GOPATH}/bin/goveralls -coverprofile=${HOME}/coverage.out -service=travis-ci -repotoken $COVERALLS_TOKEN
