@@ -10,6 +10,8 @@ The server accepts a form `POST` to `http://localhost:8080/hash` in the form of 
 When the `POST` comes in the server responds with an id (numeric) that can be used to retrieve the calculated hash. The hash is retrieved by using the id in a `GET` to `http://localhost:8080/hash/{id}`.
 The server responds to the `POST` immediately with the id, however system waits 5 seconds before actually generating the hash. Attempts to immediately retrieve the hash will not fail but will receive a 202 `Accepted` and a JSON body containing `{"ErrorMessage":"hash string not ready"}`. Meaning, "your request has been received. Further processing needs to be done to fulfill your request, come back later."
 
+### Running the server
+
 Running `hash-o-matic` will log connections to STDOUT, so you will see the queries come in. Logging control is planned for a future update.
 
 ```
@@ -24,10 +26,45 @@ $> hash-o-matic
 
 You can use any tool you wish to send the `POST` and `GET` requests to the server, including `curl`.
 ```
-$> curl -XPOST localhost:8080/hash -d 'password=angryMonkey' -H 'Content-Type: application/x-www-form-urlencoded'
+$> curl -XPOST http://localhost:8080/hash -d 'password=angryMonkey' -H 'Content-Type: application/x-www-form-urlencoded'
 {"HashId":1}
-$> curl localhost:8080/hash/1
+$> curl http://localhost:8080/hash/1
 {"HashString":"ZEHhWB65gUlzdVwtDQArEyx+KVLzp/aTaRaPlBzYRIFj6vjFdqEb0Q5B8zVKCZ0vKbZPZklJz0Fd7su2A+gf7Q=="}
+```
+
+### Stopping the server
+
+Stopping the running `hash-o-matic` server can be done by simply entering `^C` or by sending a `PUT` request to `http://localhost:8080/shutdown`. Either shutdown method will wait for any current sessions to complete before closing the connection and exiting.
+
+
+`^C` method
+```
+$> hash-o-matic
+2018/01/06 17:24:50 Server listening on: :8080
+^C2018/01/06 17:24:53 Received signal interrupt; shutting down
+2018/01/06 17:24:53 Stopping server
+2018/01/06 17:24:53 Shutdown complete.
+$>
+```
+`PUT` method
+Start server:
+```
+$> hash-o-matic
+2018/01/06 17:25:40 Server listening on: :8080
+
+```
+Send `PUT`:
+```
+$> curl -XPUT http://localhost:8080/shutdown
+shutting down...%
+$>
+```
+Output by server:
+```
+2018/01/06 17:26:21 Received call to /shutdown, shutting down
+2018/01/06 17:26:21 Stopping server
+2018/01/06 17:26:21 Shutdown complete.
+$>
 ```
 
 ## Getting Started
