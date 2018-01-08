@@ -19,6 +19,15 @@ func TestBuildShutdownHandler(t *testing.T) {
         called <- true
     }()
 
+    t.Logf("Should return %d on GET", http.StatusNotFound)
+    res, err := http.Get(server.URL)
+    if err != nil {
+        t.Logf("Error: %v", err)
+    }
+    if res.StatusCode != http.StatusNotFound {
+        t.Errorf("%d not thrown", http.StatusNotFound)
+    }
+
     t.Log("Should start graceful server shutdown on PUT")
     req, err := http.NewRequest(http.MethodPut, server.URL, strings.NewReader(""))
     if err != nil {
@@ -26,7 +35,7 @@ func TestBuildShutdownHandler(t *testing.T) {
     }
 
     t.Log("Should respond to client request")
-    res, err := http.DefaultClient.Do(req)
+    res, err = http.DefaultClient.Do(req)
     if err != nil {
         t.Errorf("Failed: %s", err.Error())
     }
@@ -34,6 +43,7 @@ func TestBuildShutdownHandler(t *testing.T) {
     if res.StatusCode != http.StatusAccepted {
         t.Errorf("PUT to /shutdown failed; expected %d got %d", http.StatusAccepted, res.StatusCode)
     }
+
 
     t.Log("shutdown channel should be set true, calling shutdown")
     shutdownCalled := <-called
