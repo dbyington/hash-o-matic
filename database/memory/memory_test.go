@@ -20,14 +20,6 @@ var dbi = Database(DB)
 var hashString = "ZEHhWB65gUlzdVwtDQArEyx+KVLzp/aTaRaPlBzYRIFj6vjFdqEb0Q5B8zVKCZ0vKbZPZklJz0Fd7su2A+gf7Q=="
 var reversedHashString = "==Q7fg+A2us7dF0zJlkZPZbKv0ZCKVz8B5Q0bEqdFjv6jFIRYzBlPaRaTa/pzLVK+xyErAQDtwVdzlUg56BWhHEZ"
 
-//func TestMain(m *testing.M) {
-//    if len(Hashes) != 0 {
-//        Hashes = []HashRecord{}
-//    }
-//    code := m.Run()
-//    os.Exit(code)
-//}
-
 func TestGetNextId(t *testing.T) {
     Id, err := dbi.GetNextId()
     if err != nil || Id != 1 {
@@ -56,6 +48,11 @@ func TestSaveHashWithId(t *testing.T) {
     }
     if savedId != Id {
         t.Errorf("Failed to save hashString; expected Id %d got %d\n", Id, savedId)
+    }
+
+    savedId, err = dbi.SaveHashWithId(hashString, 42)
+    if err == nil {
+        t.Error("Expected idErr: 'Bad Id', got:", err)
     }
 }
 
