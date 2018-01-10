@@ -11,32 +11,16 @@ import (
     "syscall"
 )
 
-const LISTEN_ADDR = ":8080"
+const DEFAULT_LISTEN_ADDR = ":8080"
 
 func main() {
 
-    handler := handlers.LogHandler(http.DefaultServeMux)
-    server := &http.Server{Addr: LISTEN_ADDR, Handler: handler}
+    // create the server, channels, and routes
+    server := BuildServer("")
+    shutdownChan, interruptChan, doneChan := BuildChannels()
+    BuildRouteHandlers(shutdownChan)
 
-    // Create a channel and signal notifier to catch OS level interrupts (i.e. ^C)
-    interruptChan := make(chan os.Signal)
-    signal.Notify(interruptChan, os.Interrupt, syscall.SIGTERM)
-
-    // Create a channel and associated handler for PUTs to /shutdown
-    shutdownChan := make(chan bool)
-    ShutdownHandler := handlers.BuildShutdownHandler(shutdownChan)
-
-    // Create channel to signal all done
-    doneChan := make(chan bool)
-
-    // routes
-    // If only '/hash/' was configured requests to '/hash' would be redirected
-    // that should not happen, hence the separate routes
-    http.HandleFunc("/hash", handlers.HashHandler)
-    http.HandleFunc("/hash/", handlers.HashHandler)
-    http.HandleFunc("/shutdown", ShutdownHandler)
-
-    // wait for interrupt or shutdown call
+    // setup to wait for an interrupt or shutdown call
     go SelectChannel(server, interruptChan, shutdownChan, doneChan)
 
     log.Printf("Server listening on: %s", server.Addr)
@@ -48,6 +32,41 @@ func main() {
     <-doneChan
     log.Println("Shutdown complete.")
 
+}
+
+func BuildServer(address string) (server *http.Server) {
+    log.Printf("Address %s", address)
+    if address == "" {
+        address = DEFAULT_LISTEN_ADDR
+    }
+    handler := handlers.LogHandler(http.DefaultServeMux)
+    server = &http.Server{Addr: address, Handler: handler}
+    return server
+}
+
+func BuildChannels() (
+    shutdownChan chan bool,
+    interruptChan chan os.Signal,
+    doneChan chan bool) {
+
+    // Create a channel and signal notifier to catch OS level interrupts (i.e. ^C)
+    interruptChan = make(chan os.Signal)
+    signal.Notify(interruptChan, os.Interrupt, syscall.SIGTERM)
+
+    // Create a channel and associated handler for PUTs to /shutdown
+    shutdownChan = make(chan bool)
+
+    // Create channel to signal all done
+    doneChan = make(chan bool)
+
+    return shutdownChan, interruptChan, doneChan
+}
+
+func BuildRouteHandlers(shutdownChan chan bool) {
+    ShutdownHandler := handlers.BuildShutdownHandler(shutdownChan)
+    http.HandleFunc("/hash", handlers.HashHandler)
+    http.HandleFunc("/hash/", handlers.HashHandler)
+    http.HandleFunc("/shutdown", ShutdownHandler)
 }
 
 func SelectChannel(

@@ -7,15 +7,42 @@ import (
     "time"
     "os"
     "syscall"
+    "reflect"
 )
+
+func TestBuildServer(t *testing.T) {
+    handler := http.HandlerFunc(MainHandler)
+    ts := httptest.NewServer(handler)
+    server := BuildServer(ts.URL)
+    defer server.Close()
+    if server.Addr != ts.URL {
+        t.Errorf("Expected new server to have URL %s got %s", ts.URL, server.Addr)
+    }
+}
+
+func TestBuildChannels(t *testing.T) {
+    shutChan, intChan, doneChan := BuildChannels()
+    
+    if reflect.TypeOf(shutChan).String() != "chan bool" {
+        t.Errorf("Expected shutChan to be a 'chan bool' got %s", reflect.TypeOf(shutChan))
+    }
+
+    if reflect.TypeOf(intChan).String() != "chan os.Signal" {
+        t.Errorf("Expected intChan to be a 'chan bool' got %s", reflect.TypeOf(intChan))
+    }
+
+    if reflect.TypeOf(doneChan).String() != "chan bool" {
+        t.Errorf("Expected doneChan to be a 'chan bool' got %s", reflect.TypeOf(doneChan))
+    }
+}
 
 func TestStopServer(t *testing.T) {
     handler := http.HandlerFunc(MainHandler)
 
     // Cannot use an instance of httptest.NewServer() in place of *http.Server
     // So create both and use the addr from the test instance
-    tserver := httptest.NewServer(handler)
-    server := &http.Server{Addr: tserver.Config.Addr}
+    ts := httptest.NewServer(handler)
+    server := &http.Server{Addr: ts.URL}
     defer server.Close()
 
     shutdownCalled := false
@@ -36,7 +63,7 @@ func TestSelectShutdownChannel(t *testing.T) {
     handler := http.HandlerFunc(MainHandler)
     // Again create an instance of both for testing
     ts := httptest.NewServer(handler)
-    server := &http.Server{Addr: ts.Config.Addr}
+    server := &http.Server{Addr: ts.URL}
 
     shutdownCalled := false
     server.RegisterOnShutdown(func() { shutdownCalled = true })
