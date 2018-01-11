@@ -2,7 +2,7 @@
 	"comment": "Just me playing with go, git, github... and heroku",
 	"ignore": "test",
 	"package": [],
-	"rootPath": "github.com/dbyington/hash-o-matic"
+	"rootPath": "github.com/dbyington/hash-o-matic",
 	"heroku": {
 		"install" : [ "./..." ],
 		"goVersion" : "go1.9"
