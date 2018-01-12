@@ -15,8 +15,13 @@ const DEFAULT_LISTEN_ADDR = ":8080"
 
 func main() {
 
+    serverAddress := DEFAULT_LISTEN_ADDR
+    if len(os.Getenv("PORT")) > 0 {
+        serverAddress = ":" + os.Getenv("PORT")
+    }
+
     // create the server, channels, and routes
-    server := BuildServer("")
+    server := BuildServer(serverAddress)
     shutdownChan, interruptChan, doneChan := BuildChannels()
     BuildRouteHandlers(shutdownChan)
 
@@ -35,10 +40,10 @@ func main() {
 }
 
 func BuildServer(address string) (server *http.Server) {
-    log.Printf("Address %s", address)
     if address == "" {
         address = DEFAULT_LISTEN_ADDR
     }
+    log.Printf("Address %s", address)
     handler := handlers.LogHandler(http.DefaultServeMux)
     server = &http.Server{Addr: address, Handler: handler}
     return server
