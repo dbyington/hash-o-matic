@@ -14,10 +14,24 @@ func TestBuildServer(t *testing.T) {
     handler := http.HandlerFunc(MainHandler)
     ts := httptest.NewServer(handler)
     server := BuildServer(ts.URL)
-    defer server.Close()
     if server.Addr != ts.URL {
         t.Errorf("Expected new server to have URL %s got %s", ts.URL, server.Addr)
     }
+    server.Close()
+
+    server = BuildServer("")
+    if server.Addr != ":8080" {
+        t.Errorf("Expected server to listen on port :8080 but got %s", server.Addr)
+    }
+    server.Close()
+
+    os.Setenv("PORT", "8088")
+    server = BuildServer(":" + os.Getenv("PORT"))
+    if server.Addr != ":8088" {
+        t.Errorf("Expected server to listen on port 8088 but got %s", server.Addr)
+    }
+    server.Close()
+
 }
 
 func TestBuildChannels(t *testing.T) {
