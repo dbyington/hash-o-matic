@@ -8,6 +8,7 @@ import (
     "strings"
     "encoding/json"
     "time"
+    "bytes"
 )
 
 const HASH_URL = "/hash"
@@ -37,6 +38,19 @@ func TestHashPostMethod(t *testing.T) {
         t.Errorf("Bad response; expected 1 got '%d'", resBody.HashId)
     }
 
+    t.Log("Should accept a json body")
+    jsonBody := JsonBody{ Password: "angryMonkey"}
+    bodyBuf := new(bytes.Buffer)
+    json.NewEncoder(bodyBuf).Encode(jsonBody)
+    res, err = http.Post(server.URL, "application/json", bodyBuf)
+    if err != nil {
+        t.Error(err)
+    }
+    if res.StatusCode != http.StatusAccepted {
+        t.Errorf("JSON POST failed, expected %d got %d\n", http.StatusAccepted, res.StatusCode)
+    }
+
+
     t.Log("Should return 400 on empty post")
     res, err = http.PostForm(server.URL, url.Values{})
     if err != nil {
@@ -45,7 +59,16 @@ func TestHashPostMethod(t *testing.T) {
     if res.StatusCode != http.StatusBadRequest {
         t.Errorf("POST to %s; expected %d got %d\n", HASH_URL, http.StatusBadRequest, res.StatusCode)
     }
-
+    var emptyJson JsonBody
+    bodyBuf = new(bytes.Buffer)
+    json.NewEncoder(bodyBuf).Encode(emptyJson)
+    res, err = http.Post(server.URL, "application/json", bodyBuf)
+    if err != nil {
+        t.Error(err)
+    }
+    if res.StatusCode != http.StatusBadRequest {
+        t.Errorf("JSON POST failed, expected %d got %d\n", http.StatusBadRequest, res.StatusCode)
+    }
 }
 
 func TestHashHandler(t *testing.T) {
