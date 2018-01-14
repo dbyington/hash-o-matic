@@ -69,6 +69,7 @@ func BuildChannels() (
 
 func BuildRouteHandlers(shutdownChan chan bool) {
     ShutdownHandler := handlers.BuildShutdownHandler(shutdownChan)
+    http.HandleFunc("/", handlers.RedirectHandler)
     http.HandleFunc("/hash", handlers.HashHandler)
     http.HandleFunc("/hash/", handlers.HashHandler)
     http.HandleFunc("/shutdown", ShutdownHandler)

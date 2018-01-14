@@ -3,6 +3,7 @@
 
 A Go based hashing REST API server
 
+This code is currently hosted on Heroku at [https://hash-o-matic.herokuapp.com](https://hash-o-matic.herokuapp.com). If you tried to go to this address and ended up here that's because a GET of / redirects here.
 
 ## What it does
 
