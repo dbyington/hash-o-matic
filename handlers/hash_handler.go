@@ -9,6 +9,8 @@ import (
     "encoding/json"
     "regexp"
     "strconv"
+    "log"
+    "io/ioutil"
 )
 
 const FORM_KEY = "password"
@@ -23,6 +25,10 @@ type HashStringReply struct {
 
 type ErrorReply struct {
     ErrorMessage string
+}
+
+type JsonBody struct {
+    Password string
 }
 func HashHandler(res http.ResponseWriter, req *http.Request) {
     switch req.Method {
@@ -44,9 +50,25 @@ func ReplyNotFound(res http.ResponseWriter) {
 }
 
 func HashPostMethod(res http.ResponseWriter, req *http.Request) {
-    req.ParseForm()
-    password, exists := req.PostForm[FORM_KEY]
-    if exists {
+    requestType := req.Header.Get("Content-Type")
+    var password string
+    switch requestType {
+    case "application/json":
+        var jsonBody JsonBody
+        fullBody, err := ioutil.ReadAll(req.Body)
+        json.Unmarshal(fullBody, &jsonBody)
+        if err !=nil {
+            log.Print("ERROR:", err)
+            badRequest(res, "missing password")
+            return
+        }
+        password = jsonBody.Password
+
+    case "application/x-www-form-urlencoded":
+        req.ParseForm()
+        password = req.PostFormValue(FORM_KEY)
+    }
+    if len(password) > 0 {
         hashId, err := database.GetNextId()
         if err != nil {
             res.WriteHeader(http.StatusInternalServerError)
@@ -56,14 +78,19 @@ func HashPostMethod(res http.ResponseWriter, req *http.Request) {
         var jsonReply HashIdReply
         jsonReply.HashId = hashId
         json.NewEncoder(res).Encode(jsonReply)
-        go SaveHash(strings.Join(password, ""), hashId)
+        go saveHash(strings.Join([]string{password}, ""), hashId)
     } else {
-        res.WriteHeader(http.StatusBadRequest)
-        res.Write([]byte("Missing key " + FORM_KEY))
+        badRequest(res, "missing password")
     }
+
 }
 
-func SaveHash(passwd string, Id int) {
+func badRequest(res http.ResponseWriter, message string) {
+    res.WriteHeader(http.StatusBadRequest)
+    res.Write([]byte("Bad request; " + message))
+}
+
+func saveHash(passwd string, Id int) {
     time.Sleep(5 * time.Second)
     hashString := util.HashString(passwd)
     database.SaveHashWithId(hashString, Id)
