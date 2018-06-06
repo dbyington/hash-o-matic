@@ -53,15 +53,16 @@ func HashPostHandler(res http.ResponseWriter, req *http.Request) {
 
 	if len(password) > 0 {
 
-		mutex.Lock()
-		HashCount++
-		mutex.Unlock()
-
 		res.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(res).Encode(map[string]int64{"hashId": HashCount})
+		HashCountMutex.Lock()
+		HashCount++
+		hashId := HashCount
+		HashCountMutex.Unlock()
+
+		json.NewEncoder(res).Encode(map[string]int64{"hashId": hashId})
 
 		wg.Add(1)
-		go saveHash(HashCount, strings.Join([]string{password}, ""))
+		go saveHash(hashId, strings.Join([]string{password}, ""))
 
 	} else {
 		badRequest(res, "missing password")
@@ -79,9 +80,9 @@ func saveHash(Id int64, passwd string) {
 
 	time.Sleep(5 * time.Second)
 
-	mutex.Lock()
+	HashesMutex.Lock()
 	Hashes[Id] = HashString(passwd)
-	mutex.Unlock()
+	HashesMutex.Unlock()
 }
 
 func HashGetHandler(res http.ResponseWriter, req *http.Request) {
@@ -109,17 +110,23 @@ func HashGetHandler(res http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	if hashId > HashCount || hashId < 1 {
+	HashCountMutex.Lock()
+	hashTotal := HashCount
+	HashCountMutex.Unlock()
+	if hashId > hashTotal || hashId < 1 {
 		ReplyNotFound(res)
 		return
 	}
 
-	if Hashes[hashId] == "" {
+	HashesMutex.Lock()
+	hash := Hashes[hashId]
+	HashesMutex.Unlock()
+	if hash == "" {
 		res.WriteHeader(http.StatusAccepted)
 		json.NewEncoder(res).Encode(map[string]string{"status": "Hash string not ready"})
 		return
 	}
 	res.WriteHeader(http.StatusOK)
-	json.NewEncoder(res).Encode(map[string]string{"hashString": Hashes[hashId]})
+	json.NewEncoder(res).Encode(map[string]string{"hashString": hash})
 
 }

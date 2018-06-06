@@ -14,18 +14,21 @@ import (
 const DEFAULT_LISTEN_ADDR = ":8080"
 
 var (
-	wg            sync.WaitGroup
-	mutex         sync.Mutex
-	shutdownChan  chan bool
-	interruptChan chan os.Signal
-	HashCount     int64
-	Hashes        map[int64]string
+	wg             sync.WaitGroup
+	shutdownChan   chan bool
+	interruptChan  chan os.Signal
+	HashCount      int64
+	HashCountMutex sync.Mutex
+	Hashes         map[int64]string
+	HashesMutex    sync.Mutex
 )
 
 type redirect struct {
 	target string
 	code   int
 }
+
+const ShutdownTimeout = 30 * time.Second
 
 func main() {
 
@@ -34,7 +37,9 @@ func main() {
 		serverAddress = ":" + os.Getenv("PORT")
 	}
 
+	HashesMutex.Lock()
 	Hashes = make(map[int64]string)
+	HashesMutex.Unlock()
 
 	// handlers for configured endpoints
 	http.HandleFunc("/", RedirectHandler)
@@ -92,7 +97,7 @@ func StopServer(server *http.Server) {
 	log.Println("Stopping server...")
 
 	// create context with a max timeout of 5 seconds
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), ShutdownTimeout)
 	defer cancel()
 
 	err := server.Shutdown(ctx)
@@ -122,6 +127,7 @@ func LogHandler(handler http.Handler) http.Handler {
 			req.Method, req.RemoteAddr, req.URL, req.UserAgent())
 		handler.ServeHTTP(res, req)
 		log.Printf("%s Request from %s Complete\n", req.Method, req.RemoteAddr)
+		log.Printf("%d hashes saved\n", HashCount)
 	})
 }
 
