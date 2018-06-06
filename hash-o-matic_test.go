@@ -1,158 +1,151 @@
 package main
 
 import (
-    "testing"
-    "net/http/httptest"
-    "net/http"
-    "time"
-    "os"
-    "syscall"
-    "reflect"
+	"bytes"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
 )
 
-func TestBuildServer(t *testing.T) {
-    handler := http.HandlerFunc(MainHandler)
-    ts := httptest.NewServer(handler)
-    server := BuildServer(ts.URL)
-    if server.Addr != ts.URL {
-        t.Errorf("Expected new server to have URL %s got %s", ts.URL, server.Addr)
-    }
-    server.Close()
-
-    server = BuildServer("")
-    if server.Addr != ":8080" {
-        t.Errorf("Expected server to listen on port :8080 but got %s", server.Addr)
-    }
-    server.Close()
-
-    os.Setenv("PORT", "8088")
-    server = BuildServer(":" + os.Getenv("PORT"))
-    if server.Addr != ":8088" {
-        t.Errorf("Expected server to listen on port 8088 but got %s", server.Addr)
-    }
-    server.Close()
-
-}
-
-func TestBuildChannels(t *testing.T) {
-    shutChan, intChan, doneChan := BuildChannels()
-    
-    if reflect.TypeOf(shutChan).String() != "chan bool" {
-        t.Errorf("Expected shutChan to be a 'chan bool' got %s", reflect.TypeOf(shutChan))
-    }
-
-    if reflect.TypeOf(intChan).String() != "chan os.Signal" {
-        t.Errorf("Expected intChan to be a 'chan bool' got %s", reflect.TypeOf(intChan))
-    }
-
-    if reflect.TypeOf(doneChan).String() != "chan bool" {
-        t.Errorf("Expected doneChan to be a 'chan bool' got %s", reflect.TypeOf(doneChan))
-    }
-}
-
 func TestStopServer(t *testing.T) {
-    handler := http.HandlerFunc(MainHandler)
+	t.Log("StopServer")
+	handler := http.HandlerFunc(MainHandler)
 
-    // Cannot use an instance of httptest.NewServer() in place of *http.Server
-    // So create both and use the addr from the test instance
-    ts := httptest.NewServer(handler)
-    server := &http.Server{Addr: ts.URL}
-    defer server.Close()
+	// Cannot use an instance of httptest.NewServer() in place of *http.Server
+	// So create both and use the addr from the test instance
+	ts := httptest.NewServer(handler)
+	server := &http.Server{Addr: ts.URL}
+	defer server.Close()
 
-    shutdownCalled := false
-    server.RegisterOnShutdown(func() {shutdownCalled = true})
-    server.ListenAndServe()
+	shutdownCalled := false
+	wg.Add(1)
+	server.RegisterOnShutdown(func() { shutdownCalled = true })
+	server.ListenAndServe()
 
-    time.Sleep(time.Second) // give the server time to start
-    StopServer(server)
-    time.Sleep(6 * time.Second) // ensure server is shutdown
-    if ! shutdownCalled {
-        t.Error("Shutdown not called")
-    }
+	time.Sleep(time.Second) // give the server time to start
+	StopServer(server)
+	time.Sleep(6 * time.Second) // ensure server is shutdown
+	if !shutdownCalled {
+		t.Error("Shutdown not called")
+	}
 
 }
 
 func TestSelectShutdownChannel(t *testing.T) {
+	t.Log("SelectShutdownChannel")
+	handler := http.HandlerFunc(MainHandler)
+	// Again create an instance of both for testing
+	ts := httptest.NewServer(handler)
+	server := &http.Server{Addr: ts.URL}
 
-    handler := http.HandlerFunc(MainHandler)
-    // Again create an instance of both for testing
-    ts := httptest.NewServer(handler)
-    server := &http.Server{Addr: ts.URL}
+	shutdownCalled := false
+	wg.Add(1)
+	server.RegisterOnShutdown(func() { shutdownCalled = true })
+	defer server.Close()
+	server.ListenAndServe()
 
-    shutdownCalled := false
-    server.RegisterOnShutdown(func() { shutdownCalled = true })
-    defer server.Close()
-    server.ListenAndServe()
+	// Create a channel and signal notifier to catch OS level interrupts (i.e. ^C)
+	interruptChan := make(chan os.Signal)
+	signal.Notify(interruptChan, os.Interrupt, syscall.SIGTERM)
 
-    intTestChan, downTestChan, doneTestChan := CreateTestChannels()
-    go SelectChannel(server, intTestChan, downTestChan, doneTestChan)
+	// Create a channel and associated handler for PUTs to /shutdown
+	shutdownChan := make(chan bool)
+	go SelectChannel(server, interruptChan, shutdownChan)
 
-    // Send to downTestChan
-    downTestChan <- true
+	// Send to shutdownChan
+	shutdownChan <- true
 
-    // wait for done
-    <-doneTestChan
+	// wait for done
+	wg.Wait()
 
-    // wait up to 6 seconds for server to exit
-    for i := 0; i < 6; i++ {
-        if shutdownCalled {
-            continue
-        } else {
-            time.Sleep(time.Second)
-        }
-    }
+	// wait up to 6 seconds for server to exit
+	for i := 0; i < 6; i++ {
+		if shutdownCalled {
+			continue
+		} else {
+			time.Sleep(time.Second)
+		}
+	}
 
-    if ! shutdownCalled {
-        t.Error("Shutdown not called on downTestChan")
-    }
+	if !shutdownCalled {
+		t.Error("Shutdown not called on shutdownChan")
+	}
 }
 
 func TestSelectInterruptChannel(t *testing.T) {
-    handler := http.HandlerFunc(MainHandler)
-    // Again create an instance of both for testing
-    ts := httptest.NewServer(handler)
-    server := &http.Server{Addr: ts.Config.Addr}
+	t.Log("SelectInterruptChannel")
+	handler := http.HandlerFunc(MainHandler)
+	// Again create an instance of both for testing
+	ts := httptest.NewServer(handler)
+	server := &http.Server{Addr: ts.Config.Addr}
 
-    shutdownCalled := false
-    server.RegisterOnShutdown(func() { shutdownCalled = true })
-    defer server.Close()
-    server.ListenAndServe()
+	shutdownCalled := false
+	wg.Add(1)
 
-    intTestChan, downTestChan, doneTestChan := CreateTestChannels()
-    go SelectChannel(server, intTestChan, downTestChan, doneTestChan)
+	server.RegisterOnShutdown(func() { shutdownCalled = true })
+	defer server.Close()
+	server.ListenAndServe()
 
-    intTestChan <- syscall.SIGINT
+	// Create a channel and signal notifier to catch OS level interrupts (i.e. ^C)
+	interruptChan := make(chan os.Signal)
+	signal.Notify(interruptChan, os.Interrupt, syscall.SIGTERM)
 
-    // wait for done
-    <- doneTestChan
+	// Create a channel and associated handler for PUTs to /shutdown
+	shutdownChan := make(chan bool)
+	go SelectChannel(server, interruptChan, shutdownChan)
 
-    // wait up to 6 seconds for server to exit
-    for i := 0; i < 6; i++ {
-        if shutdownCalled {
-            continue
-        } else {
-            time.Sleep(time.Second)
-        }
-    }
+	interruptChan <- syscall.SIGINT
 
-    if ! shutdownCalled {
-        t.Error("Shutdown not called on intTestChan")
-    }
+	// wait for done
+	wg.Wait()
 
-}
+	// wait up to 6 seconds for server to exit
+	for i := 0; i < 6; i++ {
+		if shutdownCalled {
+			continue
+		} else {
+			time.Sleep(time.Second)
+		}
+	}
 
-func CreateTestChannels() (
-    intTestChan chan os.Signal,
-    downTestChan chan bool,
-    doneTestChan chan bool) {
-    // create handlers
-    intTestChan = make(chan os.Signal, 1)
-    downTestChan = make(chan bool)
-    doneTestChan = make(chan bool)
+	if !shutdownCalled {
+		t.Error("Shutdown not called on interruptChan")
+	}
 
-    return intTestChan, downTestChan, doneTestChan
 }
 
 func MainHandler(res http.ResponseWriter, req *http.Request) {
-    return
+	return
+}
+
+func TestLogHandler(t *testing.T) {
+	t.Log("LogHandler")
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	// cleanup when we exit
+	defer func() {
+		log.SetOutput(os.Stderr)
+	}()
+
+	handler := LogHandler(http.DefaultServeMux)
+	server := httptest.NewServer(http.Handler(handler))
+	defer server.Close()
+	wg.Add(1)
+
+	expectedString := "on / using Go-http-client/1.1"
+	_, err := http.Get(server.URL)
+	if err != nil {
+		t.Error("Error testing GET for LogHandler:", err)
+	}
+	out := buf.String()
+	if !strings.Contains(out, expectedString) {
+		t.Errorf("Expected '%s' to contain '%s'", out, expectedString)
+	}
+
 }
