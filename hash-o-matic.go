@@ -1,108 +1,159 @@
 package main
 
 import (
-    "github.com/dbyington/hash-o-matic/handlers"
-    "log"
-    "net/http"
-    "context"
-    "time"
-    "os"
-    "os/signal"
-    "syscall"
+	"context"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
+	"time"
 )
 
 const DEFAULT_LISTEN_ADDR = ":8080"
 
+var (
+	wg            sync.WaitGroup
+	mutex         sync.Mutex
+	shutdownChan  chan bool
+	interruptChan chan os.Signal
+	HashCount     int64
+	Hashes        map[int64]string
+)
+
+type redirect struct {
+	target string
+	code   int
+}
+
 func main() {
 
-    serverAddress := DEFAULT_LISTEN_ADDR
-    if len(os.Getenv("PORT")) > 0 {
-        serverAddress = ":" + os.Getenv("PORT")
-    }
+	serverAddress := DEFAULT_LISTEN_ADDR
+	if len(os.Getenv("PORT")) > 0 {
+		serverAddress = ":" + os.Getenv("PORT")
+	}
 
-    // create the server, channels, and routes
-    server := BuildServer(serverAddress)
-    shutdownChan, interruptChan, doneChan := BuildChannels()
-    BuildRouteHandlers(shutdownChan)
+	Hashes = make(map[int64]string)
 
-    // setup to wait for an interrupt or shutdown call
-    go SelectChannel(server, interruptChan, shutdownChan, doneChan)
+	// handlers for configured endpoints
+	http.HandleFunc("/", RedirectHandler)
+	http.HandleFunc("/hash", HashPostHandler)
+	http.HandleFunc("/hash/", HashGetHandler)
+	http.HandleFunc("/shutdown", ShutdownHandler)
 
-    log.Printf("Server listening on: %s", server.Addr)
-    err := server.ListenAndServe()
-    if err != http.ErrServerClosed {
-        log.Fatalf("listen: %s\n", err)
-    }
+	// basic logging of connections
+	handler := LogHandler(http.DefaultServeMux)
 
-    <-doneChan
-    log.Println("Shutdown complete.")
+	// create the server, used in SelectChannel for graceful shutdown
+	server := &http.Server{Addr: serverAddress, Handler: handler}
 
-}
+	// Create a channel and signal notifier to catch OS level interrupts (i.e. ^C)
+	interruptChan = make(chan os.Signal)
+	signal.Notify(interruptChan, os.Interrupt, syscall.SIGTERM)
 
-func BuildServer(address string) (server *http.Server) {
-    if address == "" {
-        address = DEFAULT_LISTEN_ADDR
-    }
-    log.Printf("Address %s", address)
-    handler := handlers.LogHandler(http.DefaultServeMux)
-    server = &http.Server{Addr: address, Handler: handler}
-    return server
-}
+	// Create a channel and associated handler for PUTs to /shutdown
+	shutdownChan = make(chan bool)
 
-func BuildChannels() (
-    shutdownChan chan bool,
-    interruptChan chan os.Signal,
-    doneChan chan bool) {
+	// setup to wait for an interrupt or shutdown call
+	go SelectChannel(server, interruptChan, shutdownChan)
 
-    // Create a channel and signal notifier to catch OS level interrupts (i.e. ^C)
-    interruptChan = make(chan os.Signal)
-    signal.Notify(interruptChan, os.Interrupt, syscall.SIGTERM)
+	log.Printf("Server listening on: %s", server.Addr)
+	// add server to waitgroup
+	wg.Add(1)
+	go server.ListenAndServe()
 
-    // Create a channel and associated handler for PUTs to /shutdown
-    shutdownChan = make(chan bool)
+	// wait for everything to finish
+	wg.Wait()
 
-    // Create channel to signal all done
-    doneChan = make(chan bool)
+	log.Println("Shutdown complete.")
 
-    return shutdownChan, interruptChan, doneChan
-}
-
-func BuildRouteHandlers(shutdownChan chan bool) {
-    ShutdownHandler := handlers.BuildShutdownHandler(shutdownChan)
-    http.HandleFunc("/", handlers.RedirectHandler)
-    http.HandleFunc("/hash", handlers.HashHandler)
-    http.HandleFunc("/hash/", handlers.HashHandler)
-    http.HandleFunc("/shutdown", ShutdownHandler)
 }
 
 func SelectChannel(
-    server *http.Server,
-    interruptChan chan os.Signal,
-    shutdownChan chan bool,
-    doneChan chan bool) {
+	server *http.Server,
+	interruptChan chan os.Signal,
+	shutdownChan chan bool) {
 
-    select {
-    case n := <-interruptChan:
-        log.Printf("Received signal %s; shutting down\n", n.String())
-        StopServer(server)
+	select {
+	case n := <-interruptChan:
+		log.Printf("Received signal %s; shutting down\n", n.String())
+		StopServer(server)
 
-    case _ = <-shutdownChan:
-        log.Print("Received call to /shutdown, shutting down\n")
-        StopServer(server)
-    }
+	case _ = <-shutdownChan:
+		log.Printf("Received call to /shutdown, shutting down\n")
+		StopServer(server)
+	}
 
-    close(doneChan)
 }
 
 func StopServer(server *http.Server) {
+	defer wg.Done()
+	log.Println("Stopping server...")
 
-    log.Print("Stopping server")
-    // create context with a timeout of 5 seconds to allow requests in-flight to finish
-    ctx, cancel := context.WithTimeout(context.Background(), 5 * time.Second)
-    defer cancel()
+	// create context with a max timeout of 5 seconds
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-    err := server.Shutdown(ctx)
-    if err != nil {
-        log.Fatalf("Error while shutting down: %s", err)
-    }
+	err := server.Shutdown(ctx)
+	if err != nil {
+		log.Fatalf("Error while shutting down: %s", err)
+	}
+}
+
+func ShutdownHandler(res http.ResponseWriter, req *http.Request) {
+	// PUT because shutdown is a modification
+	if req.Method == http.MethodPut {
+		// shutdown issued here
+		res.WriteHeader(http.StatusAccepted)
+		res.Write([]byte("shutting down..."))
+		shutdownChan <- true
+	} else {
+		// no more supported methods to match return 404, write header first
+		res.WriteHeader(http.StatusMethodNotAllowed)
+		res.Write([]byte("Method not allowed\n"))
+	}
+}
+
+func LogHandler(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+		req.ParseForm()
+		log.Printf("Incoming %s request from %s on %s using %s\n",
+			req.Method, req.RemoteAddr, req.URL, req.UserAgent())
+		handler.ServeHTTP(res, req)
+		log.Printf("%s Request from %s Complete\n", req.Method, req.RemoteAddr)
+	})
+}
+
+func getRedirectTargets() (redirectMap map[string]redirect) {
+	redirectMap = make(map[string]redirect)
+	redirectMap["/"] = redirect{
+		"https://github.com/dbyington/hash-o-matic#readme",
+		http.StatusFound,
+	}
+
+	return redirectMap
+}
+
+func mapRedirect(requestUrl string) (redirectUrl redirect) {
+
+	var redir redirect
+	var err error
+	var ok bool
+	redirectMap := getRedirectTargets()
+
+	if redir, ok = redirectMap[requestUrl]; ok {
+		if err != nil {
+			log.Printf("Error parsing redirect url %s, got %s", redir.target, err.Error())
+		}
+	}
+	return redir
+}
+
+func RedirectHandler(res http.ResponseWriter, req *http.Request) {
+
+	redirectTo := mapRedirect(req.RequestURI)
+	if redirectTo.code > 0 {
+		http.Redirect(res, req, redirectTo.target, redirectTo.code)
+	}
 }
