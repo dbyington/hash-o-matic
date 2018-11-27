@@ -1,3 +1,7 @@
+## This is a playground. There are changes in different branches that include more idiomatic code.
+Feel free to browse around.
+When I get time I do a little more. Some changes have not been merged because tests have not been updated. 
+
 # [Hash-O-Matic](https://github.com/dbyington/hash-o-matic) [![Build Status](https://travis-ci.org/dbyington/hash-o-matic.svg?branch=development)](https://travis-ci.org/dbyington/hash-o-matic)[![Coverage Status](https://coveralls.io/repos/github/dbyington/hash-o-matic/badge.svg?branch=development)](https://coveralls.io/github/dbyington/hash-o-matic?branch=development)
 (note: coveralls.io has an [issue](https://github.com/lemurheavy/coveralls-public/issues/971) where the badge does not update. Supposedly fixed but since my badge isn't updating I'd say it's not fixed. If you want to see current test coverage click the badge to see the coveralls.io page. thx) 
 
