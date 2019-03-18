@@ -2,82 +2,83 @@ package main
 
 import (
     "bytes"
-    "encoding/json"
     "log"
     "net/http"
     "net/http/httptest"
     "os"
+    "os/signal"
     "strings"
+    "syscall"
     "testing"
     "time"
 )
 
-func TestStopServer(t *testing.T) {
-	t.Log("StopServer")
-	handler := http.HandlerFunc(MainHandler)
+//func TestStopServer(t *testing.T) {
+//	t.Log("StopServer")
+//	handler := http.HandlerFunc(MainHandler)
+//
+//	// Cannot use an instance of httptest.NewServer() in place of *http.Server
+//	// So create both and use the addr from the test instance
+//	ts := httptest.NewServer(handler)
+//	server := &hashServer{}
+//	server.Addr = ts.URL
+//	defer server.Close()
+//
+//	var shutdownCalled bool
+//	server.wg.Add(1)
+//	server.RegisterOnShutdown(func() { shutdownCalled = true })
+//	server.ListenAndServe()
+//
+//	time.Sleep(time.Second) // give the server time to start
+//	server.Stop()
+//	time.Sleep(6 * time.Second) // ensure server is shutdown
+//	if !shutdownCalled {
+//		t.Error("Shutdown not called")
+//	}
+//
+//}
 
-	// Cannot use an instance of httptest.NewServer() in place of *http.Server
-	// So create both and use the addr from the test instance
+func TestSelectShutdownChannel(t *testing.T) {
+	t.Log("SelectShutdownChannel")
+	handler := http.HandlerFunc(MainHandler)
+	// Again create an instance of both for testing
 	ts := httptest.NewServer(handler)
 	server := &hashServer{}
 	server.Addr = ts.URL
-	defer server.Close()
 
 	shutdownCalled := false
 	server.wg.Add(1)
 	server.RegisterOnShutdown(func() { shutdownCalled = true })
+	defer server.Close()
 	server.ListenAndServe()
 
-	time.Sleep(time.Second) // give the server time to start
-	server.Stop()
-	time.Sleep(6 * time.Second) // ensure server is shutdown
-	if !shutdownCalled {
-		t.Error("Shutdown not called")
+	// Create a channel and signal notifier to catch OS level interrupts (i.e. ^C)
+	interruptChan := make(chan os.Signal)
+	signal.Notify(interruptChan, os.Interrupt, syscall.SIGTERM)
+
+	// Create a channel and associated handler for PUTs to /shutdown
+	shutdownChan := make(chan bool)
+	go server.ShutdownListen()
+
+	// Send to shutdownChan
+	shutdownChan <- true
+
+	// wait for done
+	server.wg.Wait()
+
+	// wait up to 6 seconds for server to exit
+	for i := 0; i < 6; i++ {
+		if shutdownCalled {
+			continue
+		} else {
+			time.Sleep(time.Second)
+		}
 	}
 
+	if !shutdownCalled {
+		t.Error("Shutdown not called on shutdownChan")
+	}
 }
-
-//func TestSelectShutdownChannel(t *testing.T) {
-//	t.Log("SelectShutdownChannel")
-//	handler := http.HandlerFunc(MainHandler)
-//	// Again create an instance of both for testing
-//	ts := httptest.NewServer(handler)
-//    server := &hashServer{}
-//    server.Addr = ts.URL
-//
-//	shutdownCalled := false
-//	server.wg.Add(1)
-//	server.RegisterOnShutdown(func() { shutdownCalled = true })
-//	defer server.Close()
-//	server.ListenAndServe()
-//
-//	// Create a channel and signal notifier to catch OS level interrupts (i.e. ^C)
-//	interruptChan := make(chan os.Signal)
-//	signal.Notify(interruptChan, os.Interrupt, syscall.SIGTERM)
-//
-//	// Create a channel and associated handler for PUTs to /shutdown
-//	shutdownChan := make(chan bool)
-//	go server.SelectChannel()
-//
-//	// Send to shutdownChan
-//	shutdownChan <- true
-//
-//	// wait for done
-//	server.wg.Wait()
-//
-//	// wait up to 6 seconds for server to exit
-//	for i := 0; i < 6; i++ {
-//		if shutdownCalled {
-//			continue
-//		} else {
-//			time.Sleep(time.Second)
-//		}
-//	}
-//
-//	if !shutdownCalled {
-//		t.Error("Shutdown not called on shutdownChan")
-//	}
-//}
 
 //func TestSelectInterruptChannel(t *testing.T) {
 //	t.Log("SelectInterruptChannel")
@@ -100,7 +101,7 @@ func TestStopServer(t *testing.T) {
 //
 //	// Create a channel and associated handler for PUTs to /shutdown
 //	//shutdownChan := make(chan bool)
-//	go server.SelectChannel()
+//	go server.ShutdownListen()
 //
 //	interruptChan <- syscall.SIGINT
 //
@@ -122,7 +123,6 @@ func TestStopServer(t *testing.T) {
 //
 //}
 
-
 func MainHandler(res http.ResponseWriter, req *http.Request) {
 	return
 }
@@ -132,7 +132,7 @@ const HASH_EXPECTED = "ZEHhWB65gUlzdVwtDQArEyx+KVLzp/aTaRaPlBzYRIFj6vjFdqEb0Q5B8
 
 //func TestHashPostHandler(t *testing.T) {
 //    t.Log("HashPostHandler")
-//    h := &Hashes{}
+//    h := &hashes{}
 //    server := httptest.NewServer(http.HandlerFunc(h.PostHandler))
 //    h.wg.Add(1)
 //    defer server.Close()
@@ -188,48 +188,49 @@ const HASH_EXPECTED = "ZEHhWB65gUlzdVwtDQArEyx+KVLzp/aTaRaPlBzYRIFj6vjFdqEb0Q5B8
 //    }
 //}
 //
-func TestHashGetHandler(t *testing.T) {
-   t.Log("HashGetHandler")
-   h := &Hashes{list: make(map[int64]string)}
-   h.list[1] = HASH_EXPECTED
-
-   server := httptest.NewServer(http.HandlerFunc(h.GetHandler))
-   h.wg.Add(1)
-   defer server.Close()
-
-   //body := url.Values{}
-   //body.Set("password", "angryMonkey")
-   //
-   //res, err := http.PostForm(server.URL, body)
-   //defer res.Body.Close()
-   //if err != nil {
-   //    t.Error(err)
-   //}
-
-   var resHashId struct{ HashId int64 }
-   resHashId.HashId = 1
-
-   var resHashString struct{ HashString string }
-   t.Logf("Should return %d on GET to /hash/%d", http.StatusOK, resHashId.HashId)
-   getUrl := server.URL + "/hash/1"
-
-   res, err := http.Get(getUrl)
-   if err != nil {
-       t.Error(err)
-   }
-   if res.StatusCode != http.StatusOK {
-       t.Errorf("GET to %s; expected %d got %d\n", getUrl, http.StatusOK, res.StatusCode)
-   }
-
-   json.NewDecoder(res.Body).Decode(&resHashString)
-   if resHashString.HashString != HASH_EXPECTED {
-       t.Errorf("Hash mismatch; expected %s got %s", HASH_EXPECTED, resHashString.HashString)
-   }
-}
-
+//func TestHashGetHandler(t *testing.T) {
+//	t.Log("HashGetHandler")
+//	h := newHashes()
+//	h.list = append(h.list, "")
+//	h.list[0] = HASH_EXPECTED
+//
+//	server := httptest.NewServer(http.HandlerFunc(h.GetHandler))
+//	h.wg.Add(1)
+//	defer server.Close()
+//
+//	//body := url.Values{}
+//	//body.Set("password", "angryMonkey")
+//	//
+//	//res, err := http.PostForm(server.URL, body)
+//	//defer res.Body.Close()
+//	//if err != nil {
+//	//    t.Error(err)
+//	//}
+//
+//	var resHashId struct{ HashId int64 }
+//	resHashId.HashId = 1
+//
+//	var resHashString struct{ HashString string }
+//	t.Logf("Should return %d on GET to /hash/%d", http.StatusOK, resHashId.HashId)
+//	getUrl := server.URL + "/hash/1"
+//
+//	res, err := http.Get(getUrl)
+//	if err != nil {
+//		t.Error(err)
+//	}
+//	if res.StatusCode != http.StatusOK {
+//		t.Errorf("GET to %s; expected %d got %d\n", getUrl, http.StatusOK, res.StatusCode)
+//	}
+//
+//	json.NewDecoder(res.Body).Decode(&resHashString)
+//	if resHashString.HashString != HASH_EXPECTED {
+//		t.Errorf("Hash mismatch; expected %s got %s", HASH_EXPECTED, resHashString.HashString)
+//	}
+//}
 
 func TestLogHandler(t *testing.T) {
 	t.Log("LogHandler")
+	s := &hashServer{}
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	// cleanup when we exit
@@ -237,7 +238,7 @@ func TestLogHandler(t *testing.T) {
 		log.SetOutput(os.Stderr)
 	}()
 
-	handler := LogHandler(http.DefaultServeMux)
+	handler := s.LogHandler(http.DefaultServeMux)
 	server := httptest.NewServer(http.Handler(handler))
 	defer server.Close()
 
@@ -253,13 +254,25 @@ func TestLogHandler(t *testing.T) {
 
 }
 
-func TestHashString(t *testing.T) {
-   mockPassword := "angryMonkey"
-   mockHash := "ZEHhWB65gUlzdVwtDQArEyx+KVLzp/aTaRaPlBzYRIFj6vjFdqEb0Q5B8zVKCZ0vKbZPZklJz0Fd7su2A+gf7Q=="
+func TestErrorResponse(t *testing.T) {
 
-   h := &Hashes{}
-   actualHash := h.Hash(mockPassword)
-   if actualHash != mockHash {
-       t.Errorf("Failed to hash %s; expected %s, got %s\n", mockPassword, mockHash, actualHash)
-   }
+}
+
+//func TestAddTime(t *testing.T) {
+//	h := newHashes()
+//	start := time.Now()
+//	h.addTime(start)
+//
+//	t.Log(h.stats.milliseconds)
+//
+//}
+
+func TestHashString(t *testing.T) {
+	mockPassword := "angryMonkey"
+	mockHash := "ZEHhWB65gUlzdVwtDQArEyx+KVLzp/aTaRaPlBzYRIFj6vjFdqEb0Q5B8zVKCZ0vKbZPZklJz0Fd7su2A+gf7Q=="
+
+	actualHash := HashPassword(mockPassword)
+	if actualHash != mockHash {
+		t.Errorf("Failed to hash %s; expected %s, got %s\n", mockPassword, mockHash, actualHash)
+	}
 }

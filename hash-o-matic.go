@@ -5,6 +5,7 @@ import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -12,7 +13,6 @@ import (
 	"os/signal"
 	"regexp"
 	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -20,77 +20,99 @@ import (
 
 const DEFAULT_LISTEN_ADDR = ":8080"
 
-var (
-	shutdownChan  chan bool
-	interruptChan chan os.Signal
-)
+type hashes struct {
+	list     []string
+	mutex    sync.RWMutex
+	wg       sync.WaitGroup
+	stats    hashStat
+	save     chan hash
+	request  chan hash
+	response chan hash
+}
 
-type Hashes struct {
-	Count int64
-	list  map[int64]string
-	mutex sync.Mutex
-	wg    sync.WaitGroup
+type hash struct {
+	id   int64
+	hash string
 }
 
 type hashServer struct {
 	http.Server
-	wg    sync.WaitGroup
-	mutex sync.Mutex
+	mutex         sync.Mutex
+	wg            sync.WaitGroup
+	shutdownChan  chan struct{}
+	interruptChan chan os.Signal
+}
+
+type hashStat struct {
+	mutex    sync.RWMutex
+	addTime  chan int64
+	get      chan struct{}
+	response chan hashStats
+	hashStats
+}
+type hashStats struct {
+	requestCount int64
+	milliseconds int64
 }
 
 func main() {
 
-	serverAddress := DEFAULT_LISTEN_ADDR
+	serverAddws := DEFAULT_LISTEN_ADDR
 	if len(os.Getenv("PORT")) > 0 {
-		serverAddress = ":" + os.Getenv("PORT")
+		serverAddws = ":" + os.Getenv("PORT")
 	}
 
-	hashes := &Hashes{list: make(map[int64]string)}
+	// create our hashes and run the loop to handle save and requests for hashes
+	h := newHashes()
+	go h.run()
+
+	// create the s, used in ShutdownListen for graceful shutdown
+	s := &hashServer{}
+
 	// handlers for configured endpoints
-	http.HandleFunc("/hash", hashes.PostHandler)
-	http.HandleFunc("/hash/", hashes.GetHandler)
-	http.HandleFunc("/shutdown", ShutdownHandler)
+	http.HandleFunc("/hash", h.PostHandler)
+	http.HandleFunc("/hash/", h.GetHandler)
+	http.HandleFunc("/shutdown", s.ShutdownHandler)
+	http.HandleFunc("/stats", h.StatsHandler)
 
 	// basic logging of connections
-	handler := LogHandler(http.DefaultServeMux)
+	handler := s.LogHandler(http.DefaultServeMux)
 
-	// create the server, used in SelectChannel for graceful shutdown
-	server := &hashServer{}
-	server.Addr = serverAddress
-	server.Handler = handler
+	s.Addr = serverAddws
+	s.Handler = handler
 
 	// Create a channel and signal notifier to catch OS level interrupts (i.e. ^C)
-	interruptChan = make(chan os.Signal)
-	signal.Notify(interruptChan, os.Interrupt, syscall.SIGTERM)
+	s.interruptChan = make(chan os.Signal)
+	signal.Notify(s.interruptChan, os.Interrupt, syscall.SIGTERM)
 
 	// Create a channel and associated handler for PUTs to /shutdown
-	shutdownChan = make(chan bool)
+	s.shutdownChan = make(chan struct{})
 
 	// setup to wait for an interrupt or shutdown call
-	go server.SelectChannel()
+	go s.ShutdownListen()
 
-	log.Printf("Server listening on: %s", server.Addr)
-	// add server to waitgroup
-	server.wg.Add(1)
-	go server.ListenAndServe()
+	log.Printf("Server listening on: %s", s.Addr)
+	// add s to waitgroup
+	s.wg.Add(1)
+	go s.ListenAndServe()
 
-	// wait for server to finish
-	server.wg.Wait()
+	// wait for s to finish
+	s.wg.Wait()
 
 	// wait for inflight hashes to be saved
-	hashes.wg.Wait()
+	h.wg.Wait()
 
 	log.Println("Shutdown complete.")
 
 }
 
-func (s *hashServer) SelectChannel() {
+func (s *hashServer) ShutdownListen() {
 	select {
-	case n := <-interruptChan:
+	case n := <-s.interruptChan:
 		log.Printf("Received signal %s; shutting down\n", n.String())
 		s.Stop()
 
-	case _ = <-shutdownChan:
+	case <-s.shutdownChan:
 		log.Printf("Received call to /shutdown, shutting down\n")
 		s.Stop()
 	}
@@ -111,51 +133,68 @@ func (s *hashServer) Stop() {
 	}
 }
 
-func ShutdownHandler(res http.ResponseWriter, req *http.Request) {
+func (s *hashServer) ShutdownHandler(w http.ResponseWriter, req *http.Request) {
 	// PUT because shutdown is a modification
 	if req.Method == http.MethodPut {
 		// shutdown issued here
-		res.WriteHeader(http.StatusAccepted)
-		res.Write([]byte("shutting down..."))
-		shutdownChan <- true
+		w.WriteHeader(http.StatusAccepted)
+		w.Write([]byte("shutting down..."))
+		s.shutdownChan <- struct{}{}
 	} else {
 		// no more supported methods to match return 404, write header first
-		res.WriteHeader(http.StatusMethodNotAllowed)
-		res.Write([]byte("Method not allowed\n"))
+		ErrorResponse(w, http.StatusMethodNotAllowed)
 	}
 }
 
-func LogHandler(handler http.Handler) http.Handler {
-	return http.HandlerFunc(func(res http.ResponseWriter, req *http.Request) {
+func (s *hashServer) LogHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		req.ParseForm()
 		log.Printf("Incoming %s request from %s on %s using %s\n",
 			req.Method, req.RemoteAddr, req.URL, req.UserAgent())
-		handler.ServeHTTP(res, req)
+		next.ServeHTTP(w, req)
 		log.Printf("%s Request from %s Complete\n", req.Method, req.RemoteAddr)
 	})
 }
 
-func (h *Hashes) PostHandler(res http.ResponseWriter, req *http.Request) {
+func newHashes() *hashes {
+	s := hashStat{
+		get:      make(chan struct{}),
+		response: make(chan hashStats),
+		addTime:  make(chan int64),
+	}
+	return &hashes{
+		save:     make(chan hash),
+		request:  make(chan hash),
+		response: make(chan hash),
+		stats:    s,
+	}
+}
+
+func (h *hashes) PostHandler(w http.ResponseWriter, req *http.Request) {
 	h.wg.Add(1)
 	defer h.wg.Done()
 
 	if req.Method != http.MethodPost {
-		MethodNotAllowed(res)
+		ErrorResponse(w, http.StatusMethodNotAllowed)
 		return
 	}
+	start := time.Now()
+	defer h.addTime(start)
 
 	contentType := req.Header.Get("Content-Type")
 	var password string
+	log.Printf("got content type: %s", contentType)
 
 	// handle either a json or form url encoded body
 	switch contentType {
 	case "application/json":
+
 		var jsonBody struct{ Password string }
 		fullBody, err := ioutil.ReadAll(req.Body)
 		json.Unmarshal(fullBody, &jsonBody)
 		if err != nil {
 			log.Println("ERROR:", err)
-			badRequest(res, "missing password")
+			ErrorResponse(w, http.StatusBadRequest, "missing password")
 			return
 		}
 		password = jsonBody.Password
@@ -166,28 +205,24 @@ func (h *Hashes) PostHandler(res http.ResponseWriter, req *http.Request) {
 	}
 
 	if len(password) > 0 {
-
-		h.mutex.Lock()
-		h.Count++
-		h.mutex.Unlock()
-
-		res.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(res).Encode(map[string]int64{"hashId": h.Count})
-
-		h.wg.Add(1)
-		go h.save(h.Count, strings.Join([]string{password}, ""))
+		var hash hash
+		hash.hash = HashPassword(password)
+		h.save <- hash
+		hashResponse := <-h.response
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]int64{"hashId": hashResponse.id})
 
 	} else {
-		badRequest(res, "missing password")
+		ErrorResponse(w, http.StatusBadRequest, "missing password")
 	}
 }
 
-func (h *Hashes) GetHandler(res http.ResponseWriter, req *http.Request) {
+func (h *hashes) GetHandler(w http.ResponseWriter, req *http.Request) {
 	h.wg.Add(1)
 	defer h.wg.Done()
 
 	if req.Method != http.MethodGet {
-		MethodNotAllowed(res)
+		ErrorResponse(w, http.StatusMethodNotAllowed)
 		return
 	}
 
@@ -195,7 +230,7 @@ func (h *Hashes) GetHandler(res http.ResponseWriter, req *http.Request) {
 	regx := regexp.MustCompile(`/hash/(\d+)$`)
 
 	if !regx.MatchString(req.RequestURI) {
-		ReplyNotFound(res)
+		ErrorResponse(w, http.StatusNotFound)
 		return
 	}
 
@@ -203,38 +238,104 @@ func (h *Hashes) GetHandler(res http.ResponseWriter, req *http.Request) {
 	log.Println("Hash id requested:", reqId)
 	hashId, err := strconv.ParseInt(reqId, 10, 64)
 	if err != nil {
-		ReplyNotFound(res)
+		ErrorResponse(w, http.StatusNotFound)
 		return
 	}
 
-	if hashId > h.Count || hashId < 1 {
-		ReplyNotFound(res)
+	var hash hash
+	hash.id = hashId
+	h.request <- hash
+	hashResponse := <-h.response
+
+	if hashResponse.id < 1 {
+		ErrorResponse(w, http.StatusNotFound)
 		return
 	}
 
-	if h.list[hashId] == "" {
-		res.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(res).Encode(map[string]string{"status": "Hash string not ready"})
+	if hashResponse.hash == "" {
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"status": "Hash string not ready"})
 		return
 	}
-	res.WriteHeader(http.StatusOK)
-	json.NewEncoder(res).Encode(map[string]string{"hashString": h.list[hashId]})
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"hashString": hashResponse.hash})
 
 }
 
-func (h *Hashes) save(Id int64, passwd string) {
-	defer h.wg.Done()
+func (h *hashes) StatsHandler(w http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodGet {
+		ErrorResponse(w, http.StatusMethodNotAllowed)
+		return
+	}
 
-	time.Sleep(5 * time.Second)
-
-	h.mutex.Lock()
-	h.list[Id] = h.Hash(passwd)
-	h.mutex.Unlock()
+	h.stats.get <- struct{}{}
+	stats := <-h.stats.response
+	t := stats.milliseconds
+	if stats.requestCount != 0 {
+		t = stats.milliseconds / stats.requestCount
+	}
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]int64{"requests": stats.requestCount, "averageNanoseconds": t})
 }
 
-func (h *Hashes) Hash(hash string) string {
+func (h *hashes) addTime(s time.Time) {
+	e := time.Now()
+	h.stats.addTime <- e.Sub(s).Nanoseconds()
+}
+
+func (h *hashes) run() {
+	for {
+		select {
+		// a save request will come in with a hReq but a default it (0) so we just ignore the id sent and add our own.
+		case hSave := <-h.save:
+			// append an empty string to the hReq list to reserve that spot for this hReq
+			h.list = append(h.list, "")
+			hSave.id = int64(len(h.list))
+
+			// add to our wg as we're going to do the saving in another go routine that will take > 5 seconds to complete
+			h.wg.Add(1)
+			go func(ha hash) {
+				defer h.wg.Done()
+				time.Sleep(5 * time.Second)
+
+				h.mutex.Lock()
+				h.list[ha.id-1] = ha.hash
+				h.mutex.Unlock()
+			}(hSave)
+
+			// respond with the hReq, now with the id
+			h.response <- hSave
+
+			// a request for a hReq will come in with the id so we'll ignore the hReq, if any.
+		case hReq := <-h.request:
+			h.mutex.RLock()
+			// if the hReq id is not within the length of our list respond with a negative id and empty hReq
+			if hReq.id < 1 || hReq.id > int64(len(h.list)) {
+				hReq.id = 0
+				hReq.hash = ""
+			} else {
+				hReq.hash = h.list[hReq.id-1]
+			}
+			h.mutex.RUnlock()
+
+			// respond with the full hReq
+			h.response <- hReq
+
+			// Add time to the hash hashStats
+		case t := <-h.stats.addTime:
+			h.stats.milliseconds += t
+			h.stats.requestCount++
+
+			// Signal to get the hashStats
+		case <-h.stats.get:
+			h.stats.response <- h.stats.hashStats
+		}
+	}
+}
+
+func HashPassword(password string) string {
 	// Sum512() argument must be type [size]byte
-	byteArray := []byte(hash)
+	byteArray := []byte(password)
 	sum512byteArray := sha512.Sum512(byteArray)
 
 	// EncodeToString() argument must be type []byte so first turn the byte array into a string
@@ -244,17 +345,15 @@ func (h *Hashes) Hash(hash string) string {
 	return base64string
 }
 
-func ReplyNotFound(res http.ResponseWriter) {
-	res.WriteHeader(http.StatusNotFound)
-	errorReply := map[string]string{"ErrorMessage": "Page not found"}
-	json.NewEncoder(res).Encode(errorReply)
-}
-func MethodNotAllowed(res http.ResponseWriter) {
-	res.WriteHeader(http.StatusMethodNotAllowed)
-	json.NewEncoder(res).Encode(map[string]string{"ErrorMessage": "Method not allowed"})
-}
+func ErrorResponse(w http.ResponseWriter, status int, message ...string) {
+	var m string
+	w.WriteHeader(status)
 
-func badRequest(res http.ResponseWriter, message string) {
-	res.WriteHeader(http.StatusBadRequest)
-	res.Write([]byte("Bad request; " + message))
+	if len(message) > 0 {
+		m = fmt.Sprintf("%s: %s", http.StatusText(status), message[0])
+	} else {
+		m = http.StatusText(status)
+	}
+	json.NewEncoder(w).Encode(map[string]string{"ErrorMessage": m})
+
 }
