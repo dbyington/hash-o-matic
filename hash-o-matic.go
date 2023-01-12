@@ -24,7 +24,7 @@ type hashes struct {
 	list     []string
 	mutex    sync.RWMutex
 	wg       sync.WaitGroup
-	stats    hashStat
+	stats    *hashStat
 	save     chan hash
 	request  chan hash
 	response chan hash
@@ -157,7 +157,7 @@ func (s *hashServer) LogHandler(next http.Handler) http.Handler {
 }
 
 func newHashes() *hashes {
-	s := hashStat{
+	s := &hashStat{
 		get:      make(chan struct{}),
 		response: make(chan hashStats),
 		addTime:  make(chan int64),
